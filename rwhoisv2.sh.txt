@@ -1,0 +1,107 @@
+#!/bin/bash
+# Tue Dec 30 12:38:32 CET 2008 <aramosf @ unsec.net>
+# 
+# TODO: Bucle para los alias.
+# En modo cgi?
+
+APPID="7066FAEB6435DB963AE3CD4AC79CBED8B962779C"
+
+
+function usage() {
+  cat << EOF
+  $0 <-h IP> [-n] [-g NUM]
+     -h <host> : IP/Host address to check
+     -n        : Don't check from vhosts with A record
+     -g <num>  : Number of results to get (default 100)
+EOF
+exit 0
+}
+
+URL="http://api.search.live.net/json.aspx"
+DNS=1; HITS=0; HOST=0
+
+while getopts ":h:g:n" options; do
+  case $options in
+         h ) HOST=$OPTARG;;
+         g ) HITS=$OPTARG;;
+	 n ) DNS=0;;
+         : ) echo "-$OPTARG requires an argument."; usage;;
+	 \? ) usage;;
+ esac
+done
+
+if [ "$HOST" == "0" ]; then
+   echo "No IP/Host specified"
+   usage
+fi
+if [[ $HOST =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
+  then 
+	IP=$HOST
+  else
+	IP=`host $HOST|awk 'BEGIN {NF = 1} /address/{print $4}'`
+	if [ $( echo "$IP"|wc -l) -gt 1 ]; then
+		echo $HOST have an alias. Using first IP.
+		IP=`echo "$IP"|head -1`
+	fi
+fi
+if [ -z $IP ]; then echo "Error with IP: \"$IP\""; exit 0; fi
+
+RSLTS=`curl -s "$URL?Appid=$APPID&sources=web&query=IP:\"$IP\""|sed -e \
+  's/.*Total":\([0-9]*\).*/\1/'`
+echo "Number of results: $RSLTS. IP: $IP"
+
+if [ $RSLTS -gt 1000 ] && [ $HITS == 0 ]; then 
+ echo "Too much results, using first 100"
+ RSLTS=100
+fi
+if [ $HITS -gt 0 ]; then 
+ echo "Forcing to get $HITS results"
+ RSLTS=$HITS;
+fi
+
+# Let's go.
+echo "------------------------------------"
+OFFSET=0
+while [ $OFFSET -lt $(( $RSLTS + 50 )) ]; do 
+ DA=$(curl -s \
+ "$URL?Appid=$APPID&Web.Count=50&sources=web&query=IP:\"$IP\"+$str&Web.Offset=$OFFSET" \
+ | sed -e 's|\\/|/|g' -e 's|,|\n|g'|grep '"Url":' \
+ | sed -e 's|.*//\([^/|^"]*\)"*.*|\1|')
+ DB="$DB\n$DA"
+ str=`echo -e "$DB"|sort|uniq -c|sort -gr \
+   |awk '$2~/[aA-zZ]/ {print "-site:"$2}'|head -15|tr '\n' '+'`
+ OFFSET=$(( $OFFSET + 50 ))
+done
+
+if [ $DNS == 1 ]; then
+ for host in `echo -e "$DB" | sort | uniq`; do
+	ADDR=`host $host| awk 'BEGIN {NF = 1}/address/{print $4}'`
+	if [ "$ADDR" == "$IP" ]; then
+		AA="$AA $host"
+	else
+		if [ -z "$ADDR" ]; then ADDR="No_address"; fi
+		BB="$BB $host:${ADDR}"
+	fi
+ done
+ A=`echo -e "$AA" |sort | uniq`
+ echo $A \
+ |awk '{ for (idx=1; $idx; i++) {printf "%-39s %-39s\n", $(idx++),$(idx++); }}'
+ echo Total: `echo "$AA"|tr ' ' '\n'|sort|uniq|sed -e 1d|wc -l`
+ ETOTAL=`echo -e "$BB" |tr ' ' '\n'|sort |uniq|sed -e 1d|wc -l`
+ if [ $ETOTAL -gt 0 ]; then
+  echo -e "\nWith errors"
+  echo "------------------------------------"
+  echo -e "$BB" |tr ' ' '\n'|sort|uniq|sed -e 1d \
+     |awk -F: '{ printf "%-39s %-39s\n", $1,$2}'
+  echo "Total with errors: $ETOTAL"
+ else
+   echo -e "\nNo errors found"
+ fi
+else
+ A=`echo -e "$DB" |sort | uniq`
+ echo $A \
+ |awk '{ for (idx=1; $idx; i++) {printf "%-39 %-39\n", $(idx++),$(idx++); }}'
+ echo Total: `echo -e "$A" |sort | uniq|wc -l`
+fi
+
+
